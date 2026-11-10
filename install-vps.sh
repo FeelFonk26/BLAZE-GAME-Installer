@@ -15,7 +15,8 @@ log() { printf '\n\033[1;36m[BLAZE] %s\033[0m\n' "$*"; }
 fail() { printf '\n[BLAZE] ОШИБКА: %s\n' "$*" >&2; exit 1; }
 cleanup() {
   unset GIT_ASKPASS GIT_TERMINAL_PROMPT BLAZE_GITHUB_TOKEN_FILE 2>/dev/null || true
-  [[ -n "$AUTH_DIR" && -d "$AUTH_DIR" ]] && rm -rf -- "$AUTH_DIR"
+  if [[ -n "$AUTH_DIR" && -d "$AUTH_DIR" ]]; then rm -rf -- "$AUTH_DIR"; fi
+  return 0
 }
 trap cleanup EXIT
 trap 'fail "Установка прервалась на строке $LINENO. Существующие службы TASKORA не останавливались."' ERR
