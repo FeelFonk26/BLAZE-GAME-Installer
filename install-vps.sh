@@ -58,10 +58,6 @@ export BLAZE_GITHUB_TOKEN_FILE="$AUTH_FILE"
 
 log "Проверяю доступ к приватному репозиторию"
 git ls-remote "$REPO" refs/heads/main >/dev/null || fail "GitHub не дал прочитать FeelFonk26/BLAZE-GAME. Проверь, что токен имеет Contents: Read-only именно для этого репозитория."
-cleanup
-AUTH_DIR=""
-AUTH_FILE=""
-
 log "Проверяю DNS домена"
 DNS_IP="$(getent ahostsv4 "$DOMAIN" | awk 'NR==1 {print $1}')"
 [[ "$DNS_IP" == "157.228.125.45" ]] || fail "$DOMAIN сейчас разрешается в '$DNS_IP', ожидался 157.228.125.45. Проверь DuckDNS."
@@ -79,6 +75,9 @@ elif [[ ! -e "$APP_DIR" ]]; then
 else
   fail "$APP_DIR существует, но это не Git-репозиторий. Ничего не удаляю."
 fi
+cleanup
+AUTH_DIR=""
+AUTH_FILE=""
 cd "$APP_DIR"
 [[ -f "$COMPOSE_FILE" && -f "production.env.example" && -f "deploy/nginx-host.conf" ]] || fail "В репозитории отсутствуют необходимые production-файлы."
 
