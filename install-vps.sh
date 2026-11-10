@@ -78,11 +78,14 @@ elif [[ -d "$APP_DIR" ]] && [[ -z "$(find "$APP_DIR" -mindepth 1 -maxdepth 1 -pr
 else
   fail "$APP_DIR существует, но это не Git-репозиторий или каталог не пуст. Ничего не удаляю."
 fi
+install -d -m 0700 /etc/blaze-game
+install -m 0600 "$AUTH_FILE" /etc/blaze-game/github-token
 cleanup
 AUTH_DIR=""
 AUTH_FILE=""
 cd "$APP_DIR"
 [[ -f "$COMPOSE_FILE" && -f "production.env.example" && -f "deploy/nginx-host.conf" ]] || fail "В репозитории отсутствуют необходимые production-файлы."
+[[ -f "deploy/updater/update.sh" && -f "deploy/updater/updater-server.py" && -f "deploy/updater/blaze-game-updater.socket" && -f "deploy/updater/blaze-game-updater.service" && -f "deploy/updater/blaze-game-update-runner.service" ]] || fail "В репозитории отсутствуют файлы безопасного Telegram updater."
 
 log "Создаю закрытую конфигурацию"
 if [[ ! -f .env ]]; then
@@ -93,6 +96,9 @@ grep -q '^POSTGRES_PASSWORD=' .env || fail "В .env нет POSTGRES_PASSWORD."
 grep -q '^BOT_TOKEN=' .env || fail "В .env нет BOT_TOKEN."
 grep -q '^DOMAIN=' .env || fail "В .env нет DOMAIN."
 grep -q '^WEB_APP_URL=' .env || fail "В .env нет WEB_APP_URL."
+if ! grep -q '^OWNER_TELEGRAM_IDS=' .env; then
+  printf '\n# Telegram numeric owner ID(s), comma-separated.\nOWNER_TELEGRAM_IDS=\n' >> .env
+fi
 
 python3 - <<'PY'
 from pathlib import Path
@@ -115,7 +121,109 @@ for key, value in updates.items():
 p.write_text("\n".join(out) + "\n")
 PY
 
-if grep -q '^POSTGRES_PASSWORD=replace_with_a_long_random_password$' .env; then
+OWNER_IDS_VALUE="$(sed -n 's/^OWNER_TELEGRAM_IDS=//p' .env | tail -n 1)"
+if [[ -z "$OWNER_IDS_VALUE" ]]; then
+  printf '\nУкажи свой числовой Telegram ID (его можно узнать через @userinfobot).
+'
+  read -r -p "OWNER_TELEGRAM_IDS: " OWNER_IDS_VALUE
+fi
+[[ "$OWNER_IDS_VALUE" =~ ^[0-9]+(,[0-9]+)*$ ]] || fail "OWNER_TELEGRAM_IDS должен содержать только числовые Telegram ID через запятую."
+OWNER_IDS_VALUE="$OWNER_IDS_VALUE" python3 - <<'PY'
+import os
+from pathlib import Path
+p = Path(".env")
+lines = p.read_text().splitlines()
+value = os.environ["OWNER_IDS_VALUE"]
+lines = [("OWNER_TELEGRAM_IDS=" + value) if x.startswith("OWNER_TELEGRAM_IDS=") else x for x in lines]
+if not any(x.startswith("OWNER_TELEGRAM_IDS=") for x in lines):
+    lines.append("OWNER_TELEGRAM_IDS=" + value)
+p.write_text("\n".join(lines) + "\n")
+PY
+unset OWNER_IDS_VALUE
+
+if grep -q '^POSTGRES_PASSWORD=replace_with_a_long_random_password
+  DB_PASSWORD="$(openssl rand -hex 32)"
+  DB_PASSWORD_VALUE="$DB_PASSWORD" python3 - <<'PY'
+import os
+from pathlib import Path
+p = Path(".env")
+lines = p.read_text().splitlines()
+lines = [("POSTGRES_PASSWORD=" + os.environ["DB_PASSWORD_VALUE"]) if x.startswith("POSTGRES_PASSWORD=") else x for x in lines]
+p.write_text("\n".join(lines) + "\n")
+PY
+  unset DB_PASSWORD DB_PASSWORD_VALUE
+fi
+
+if grep -q '^BOT_TOKEN=replace_with_BotFather_token$' .env; then
+  printf '\nВставь токен BotFather для @BlazeGameAppBot. Ввод скрыт, токен не появится на экране.\n'
+  read -r -s -p "BOT_TOKEN: " BOT_TOKEN_VALUE
+  printf '\n'
+  [[ -n "$BOT_TOKEN_VALUE" ]] || fail "Пустой токен."
+  BOT_TOKEN_VALUE="$BOT_TOKEN_VALUE" python3 - <<'PY'
+import os
+from pathlib import Path
+p = Path(".env")
+lines = p.read_text().splitlines()
+token = os.environ["BOT_TOKEN_VALUE"]
+lines = [("BOT_TOKEN=" + token) if x.startswith("BOT_TOKEN=") else x for x in lines]
+p.write_text("\n".join(lines) + "\n")
+PY
+  unset BOT_TOKEN_VALUE
+fi
+
+grep -q '^BOT_TOKEN=replace_' .env && fail "В .env остался шаблон BOT_TOKEN."
+grep -q '^POSTGRES_PASSWORD=replace_' .env && fail "В .env остался шаблон пароля базы."
+chmod 600 .env
+
+log "Устанавливаю ограниченный системный updater для команды /restart"
+install -d -m 0755 /usr/local/libexec/blaze-game
+install -m 0755 deploy/updater/update.sh /usr/local/sbin/blaze-game-update
+install -m 0755 deploy/updater/git-askpass /usr/local/libexec/blaze-game/git-askpass
+install -m 0755 deploy/updater/updater-server.py /usr/local/libexec/blaze-game/updater-server.py
+install -m 0644 deploy/updater/blaze-game-updater.socket /etc/systemd/system/blaze-game-updater.socket
+install -m 0644 deploy/updater/blaze-game-updater.service /etc/systemd/system/blaze-game-updater.service
+install -m 0644 deploy/updater/blaze-game-update-runner.service /etc/systemd/system/blaze-game-update-runner.service
+touch /var/log/blaze-game-update.log
+chmod 0600 /var/log/blaze-game-update.log
+systemctl daemon-reload
+systemctl enable --now blaze-game-updater.socket
+
+log "Собираю и запускаю изолированные контейнеры BLAZE"
+docker compose --env-file .env -f "$COMPOSE_FILE" up -d --build
+
+log "Добавляю отдельный виртуальный хост Nginx"
+if [[ -e "$NGINX_SITE" || -L "$NGINX_SITE" ]]; then
+  cmp -s "deploy/nginx-host.conf" "$NGINX_SITE" || fail "$NGINX_SITE уже существует и отличается. Не перезаписываю чужую конфигурацию."
+else
+  install -m 0644 "deploy/nginx-host.conf" "$NGINX_SITE"
+fi
+if [[ -L "$NGINX_LINK" ]]; then
+  [[ "$(readlink -f "$NGINX_LINK")" == "$NGINX_SITE" ]] || fail "Ссылка $NGINX_LINK указывает на другой файл."
+elif [[ -e "$NGINX_LINK" ]]; then
+  fail "$NGINX_LINK уже существует и не является ожидаемой ссылкой."
+else
+  ln -s "$NGINX_SITE" "$NGINX_LINK"
+fi
+nginx -t
+systemctl reload nginx
+
+log "Проверяю Certbot и выпускаю HTTPS"
+if ! command -v certbot >/dev/null; then
+  apt-get update
+  DEBIAN_FRONTEND=noninteractive apt-get install -y certbot python3-certbot-nginx
+fi
+certbot --nginx -d "$DOMAIN" --non-interactive --agree-tos --register-unsafely-without-email --redirect
+
+log "Проверяю BLAZE"
+docker compose --env-file .env -f "$COMPOSE_FILE" ps
+curl --retry 12 --retry-delay 5 --retry-connrefused -fsS "https://$DOMAIN/health"
+
+printf '\nBLAZE GAME deployment finished.\n'
+printf 'Mini App: https://%s\n' "$DOMAIN"
+printf 'Bot: @BlazeGameAppBot\n'
+printf 'Project: %s\n' "$APP_DIR"
+printf 'TASKORA service/configuration was not modified.\n'
+ .env; then
   DB_PASSWORD="$(openssl rand -hex 32)"
   DB_PASSWORD_VALUE="$DB_PASSWORD" python3 - <<'PY'
 import os
