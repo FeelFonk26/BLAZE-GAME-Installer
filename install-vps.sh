@@ -193,7 +193,13 @@ docker compose --env-file .env -f "$COMPOSE_FILE" up -d --build
 
 log "Добавляю отдельный виртуальный хост Nginx"
 if [[ -e "$NGINX_SITE" || -L "$NGINX_SITE" ]]; then
-  cmp -s "deploy/nginx-host.conf" "$NGINX_SITE" || fail "$NGINX_SITE уже существует и отличается. Не перезаписываю чужую конфигурацию."
+  if cmp -s "deploy/nginx-host.conf" "$NGINX_SITE"; then
+    log "Существующий BLAZE virtual host уже совпадает с шаблоном"
+  elif grep -Fq "server_name $DOMAIN;" "$NGINX_SITE" && grep -Fq "proxy_pass http://127.0.0.1:18080;" "$NGINX_SITE"; then
+    log "Обнаружен существующий Certbot-managed BLAZE virtual host; оставляю его без изменений"
+  else
+    fail "$NGINX_SITE уже существует и не похож на BLAZE virtual host. Не перезаписываю чужую конфигурацию."
+  fi
 else
   install -m 0644 "deploy/nginx-host.conf" "$NGINX_SITE"
 fi
