@@ -32,7 +32,7 @@ command -v openssl >/dev/null || fail "OpenSSL не установлен."
 
 printf '\nНужен GitHub Personal Access Token с доступом только Contents: Read-only к приватному FeelFonk26/BLAZE-GAME.\n'
 printf 'Создать токен можно здесь: https://github.com/settings/personal-access-tokens/new\n'
-printf 'Ввод скрыт. Токен не будет сохранён в Git remote, .env или истории команд.\n'
+printf 'Ввод скрыт. Токен хранится только на VDS в /etc/blaze-game/github-token с правами 0600, чтобы бот мог получать обновления.\n'
 read -r -s -p "GitHub read-only token: " GITHUB_TOKEN_VALUE
 printf '\n'
 [[ -n "$GITHUB_TOKEN_VALUE" ]] || fail "GitHub-токен не введён."
@@ -78,11 +78,15 @@ elif [[ -d "$APP_DIR" ]] && [[ -z "$(find "$APP_DIR" -mindepth 1 -maxdepth 1 -pr
 else
   fail "$APP_DIR существует, но это не Git-репозиторий или каталог не пуст. Ничего не удаляю."
 fi
+
+install -d -m 0700 /etc/blaze-game
+install -m 0600 "$AUTH_FILE" /etc/blaze-game/github-token
 cleanup
 AUTH_DIR=""
 AUTH_FILE=""
 cd "$APP_DIR"
 [[ -f "$COMPOSE_FILE" && -f "production.env.example" && -f "deploy/nginx-host.conf" ]] || fail "В репозитории отсутствуют необходимые production-файлы."
+[[ -f "deploy/updater/update.sh" && -f "deploy/updater/updater-server.py" && -f "deploy/updater/git-askpass" && -f "deploy/updater/blaze-game-updater.socket" && -f "deploy/updater/blaze-game-updater.service" && -f "deploy/updater/blaze-game-update-runner.service" ]] || fail "В репозитории отсутствуют файлы безопасного Telegram updater."
 
 log "Создаю закрытую конфигурацию"
 if [[ ! -f .env ]]; then
@@ -93,6 +97,9 @@ grep -q '^POSTGRES_PASSWORD=' .env || fail "В .env нет POSTGRES_PASSWORD."
 grep -q '^BOT_TOKEN=' .env || fail "В .env нет BOT_TOKEN."
 grep -q '^DOMAIN=' .env || fail "В .env нет DOMAIN."
 grep -q '^WEB_APP_URL=' .env || fail "В .env нет WEB_APP_URL."
+if ! grep -q '^OWNER_TELEGRAM_IDS=' .env; then
+  printf '\nOWNER_TELEGRAM_IDS=\n' >> .env
+fi
 
 python3 - <<'PY'
 from pathlib import Path
@@ -145,9 +152,41 @@ PY
   unset BOT_TOKEN_VALUE
 fi
 
+OWNER_IDS_VALUE="$(sed -n 's/^OWNER_TELEGRAM_IDS=//p' .env | tail -n 1)"
+if [[ -z "$OWNER_IDS_VALUE" ]]; then
+  printf '\nУкажи свой числовой Telegram ID (его можно узнать через @userinfobot).\n'
+  read -r -p "OWNER_TELEGRAM_IDS: " OWNER_IDS_VALUE
+fi
+[[ "$OWNER_IDS_VALUE" =~ ^[0-9]+(,[0-9]+)*$ ]] || fail "OWNER_TELEGRAM_IDS должен содержать только числовые Telegram ID через запятую."
+OWNER_IDS_VALUE="$OWNER_IDS_VALUE" python3 - <<'PY'
+import os
+from pathlib import Path
+p = Path(".env")
+lines = p.read_text().splitlines()
+value = os.environ["OWNER_IDS_VALUE"]
+lines = [("OWNER_TELEGRAM_IDS=" + value) if x.startswith("OWNER_TELEGRAM_IDS=") else x for x in lines]
+if not any(x.startswith("OWNER_TELEGRAM_IDS=") for x in lines):
+    lines.append("OWNER_TELEGRAM_IDS=" + value)
+p.write_text("\n".join(lines) + "\n")
+PY
+unset OWNER_IDS_VALUE
+
 grep -q '^BOT_TOKEN=replace_' .env && fail "В .env остался шаблон BOT_TOKEN."
 grep -q '^POSTGRES_PASSWORD=replace_' .env && fail "В .env остался шаблон пароля базы."
 chmod 600 .env
+
+log "Устанавливаю ограниченный системный updater для команды /restart"
+install -d -m 0755 /usr/local/libexec/blaze-game
+install -m 0755 deploy/updater/update.sh /usr/local/sbin/blaze-game-update
+install -m 0755 deploy/updater/git-askpass /usr/local/libexec/blaze-game/git-askpass
+install -m 0755 deploy/updater/updater-server.py /usr/local/libexec/blaze-game/updater-server.py
+install -m 0644 deploy/updater/blaze-game-updater.socket /etc/systemd/system/blaze-game-updater.socket
+install -m 0644 deploy/updater/blaze-game-updater.service /etc/systemd/system/blaze-game-updater.service
+install -m 0644 deploy/updater/blaze-game-update-runner.service /etc/systemd/system/blaze-game-update-runner.service
+touch /var/log/blaze-game-update.log
+chmod 0600 /var/log/blaze-game-update.log
+systemctl daemon-reload
+systemctl enable --now blaze-game-updater.socket
 
 log "Собираю и запускаю изолированные контейнеры BLAZE"
 docker compose --env-file .env -f "$COMPOSE_FILE" up -d --build
