@@ -72,8 +72,11 @@ if [[ -d "$APP_DIR/.git" ]]; then
   git -C "$APP_DIR" pull --ff-only origin main
 elif [[ ! -e "$APP_DIR" ]]; then
   git clone --branch main --single-branch "$REPO" "$APP_DIR"
+elif [[ -d "$APP_DIR" ]] && [[ -z "$(find "$APP_DIR" -mindepth 1 -maxdepth 1 -print -quit)" ]]; then
+  rmdir "$APP_DIR"
+  git clone --branch main --single-branch "$REPO" "$APP_DIR"
 else
-  fail "$APP_DIR существует, но это не Git-репозиторий. Ничего не удаляю."
+  fail "$APP_DIR существует, но это не Git-репозиторий или каталог не пуст. Ничего не удаляю."
 fi
 cleanup
 AUTH_DIR=""
