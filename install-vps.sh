@@ -160,6 +160,18 @@ fi
 [[ "$OWNER_IDS_VALUE" =~ ^[0-9]+(,[0-9]+)*$ ]] || fail "OWNER_TELEGRAM_IDS должен содержать только числовые Telegram ID через запятую."
 OWNER_IDS_VALUE="$OWNER_IDS_VALUE" python3 - <<'PY'
 import os
+import sys
+
+raw = os.environ["OWNER_IDS_VALUE"]
+try:
+    ids = [int(part) for part in raw.split(",")]
+except ValueError:
+    sys.exit("OWNER_TELEGRAM_IDS содержит некорректный ID.")
+if not ids or any(value <= 0 or value > 9007199254740991 for value in ids):
+    sys.exit("OWNER_TELEGRAM_IDS должен содержать положительные безопасные числовые Telegram ID.")
+PY
+OWNER_IDS_VALUE="$OWNER_IDS_VALUE" python3 - <<'PY'
+import os
 from pathlib import Path
 p = Path(".env")
 lines = p.read_text().splitlines()
