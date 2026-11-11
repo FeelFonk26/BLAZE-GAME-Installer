@@ -10,4 +10,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Check installer shell syntax
-        run: bash -n install-vps.sh
+        run: |
+          bash -n install-vps.sh
+          bash -n install-updater-only.sh
