@@ -74,6 +74,7 @@ touch /var/log/blaze-game-update.log
 chmod 0600 /var/log/blaze-game-update.log
 systemctl daemon-reload
 systemctl enable --now blaze-game-updater.socket
+systemctl restart blaze-game-updater.service
 systemctl is-active --quiet blaze-game-updater.socket || fail "systemd socket не запустился."
 [[ -S /run/blaze-game-updater.sock ]] || fail "systemd не создал Unix socket."
 
